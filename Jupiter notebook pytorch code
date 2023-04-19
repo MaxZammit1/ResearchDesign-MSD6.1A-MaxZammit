@@ -1,0 +1,350 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "private_outputs": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "gpuClass": "standard",
+    "accelerator": "GPU"
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "source": [
+        "### Refs\n",
+        "https://www.tensorflow.org/tutorials/generative/autoencoder#second_example_image_denoising"
+      ],
+      "metadata": {
+        "id": "hKElEsNsCEZo"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "FWsglzorEU4I"
+      },
+      "source": [
+        "### Imports"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "J5T021tK864t"
+      },
+      "source": [
+        "import torch\n",
+        "import torch.nn as nn\n",
+        "import torch.nn.functional as F\n",
+        "import torch.optim as optim\n",
+        "from torchvision import datasets, transforms\n",
+        "import matplotlib.pyplot as plt\n",
+        "import os\n",
+        "import numpy as np\n",
+        "from skimage import io"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "root = '2750/'\n",
+        "download_ON = os.path.exists(root)\n",
+        "\n",
+        "if not download_ON:\n",
+        "    os.system('wget http://madm.dfki.de/files/sentinel/EuroSAT.zip')\n",
+        "    !unzip EuroSAT.zip\n",
+        "    download_ON = True"
+      ],
+      "metadata": {
+        "id": "iXTZsA1lRqeZ"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "def iloader(path):\n",
+        "    image = np.asarray((io.imread(path))/255,dtype='float32')\n",
+        "    return image.transpose(2,0,1)"
+      ],
+      "metadata": {
+        "id": "qK-ICXmqRst-"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "#eurosat_data = datasets.EuroSAT(root='./data', download=True, transform=None)\n",
+        "transform = transforms.ToTensor()\n",
+        "data = datasets.DatasetFolder(root=root,loader = iloader, transform=None, extensions = 'jpg')"
+      ],
+      "metadata": {
+        "id": "2G_bfp7rRv4g"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "train_set, val_set = torch.utils.data.random_split(data, [25000, 2000])"
+      ],
+      "metadata": {
+        "id": "0dtYvH1rRxSZ"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "train_data_loader = torch.utils.data.DataLoader(dataset=train_set,\n",
+        "                                          batch_size=64,\n",
+        "                                          shuffle=True)\n",
+        "test_loader = torch.utils.data.DataLoader(dataset=val_set)"
+      ],
+      "metadata": {
+        "id": "i4Lq2AF2Ryo-"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "dataiter = iter(train_data_loader)\n",
+        "images, labels = next(dataiter)\n",
+        "print(torch.min(images), torch.max(images))"
+      ],
+      "metadata": {
+        "id": "4tHI1FIVR0EV"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "def add_noise(inputs,noise_factor=0.2):\n",
+        "\tnoisy = inputs+torch.randn_like(inputs) * noise_factor\n",
+        "\tnoisy = torch.clip(noisy,0.,1.)\n",
+        "\treturn noisy"
+      ],
+      "metadata": {
+        "id": "uc8Gjk_sR1Ow"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "device = torch.device(\"cuda:0\" if torch.cuda.is_available() else \"cpu\")\n",
+        "print(device)"
+      ],
+      "metadata": {
+        "id": "AGivpOUlR2rL"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "class Autoencoder_Linear(nn.Module):\n",
+        "    def __init__(self):\n",
+        "        super().__init__()        \n",
+        "        self.encoder = nn.Sequential(\n",
+        "            nn.Linear(28 * 28, 128), # (N, 784) -> (N, 128)\n",
+        "            nn.ReLU(),\n",
+        "            nn.Linear(128, 64),\n",
+        "            nn.ReLU(),\n",
+        "            nn.Linear(64, 12),\n",
+        "            nn.ReLU(),\n",
+        "            nn.Linear(12, 3) # -> N, 3\n",
+        "        )\n",
+        "        \n",
+        "        self.decoder = nn.Sequential(\n",
+        "            nn.Linear(3, 12),\n",
+        "            nn.ReLU(),\n",
+        "            nn.Linear(12, 64),\n",
+        "            nn.ReLU(),\n",
+        "            nn.Linear(64, 128),\n",
+        "            nn.ReLU(),\n",
+        "            nn.Linear(128, 28 * 28),\n",
+        "            nn.Sigmoid()\n",
+        "        )\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        encoded = self.encoder(x)\n",
+        "        decoded = self.decoder(encoded)\n",
+        "        return decoded"
+      ],
+      "metadata": {
+        "id": "WWqVp6eVs4yY"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "class Autoencoder(nn.Module):\n",
+        "    def __init__(self):\n",
+        "        super().__init__()        \n",
+        "        # N, 1, 28, 28\n",
+        "        self.encoder = nn.Sequential(\n",
+        "            nn.Conv2d(3, 24, 12, stride=2, padding=5), # -> N, 16, 14, 14\n",
+        "            nn.ReLU(),\n",
+        "            nn.Conv2d(24, 12, 9, stride=2, padding=4), # -> N, 32, 7, 7\n",
+        "            nn.ReLU(),\n",
+        "            nn.Conv2d(12, 6, 6, stride=2, padding=2), # -> N, 64, 1, 1\n",
+        "            nn.ReLU()\n",
+        "        )\n",
+        "        \n",
+        "        # N , 64, 1, 1\n",
+        "        self.decoder = nn.Sequential(\n",
+        "            nn.ConvTranspose2d(6, 12, 6, stride = 2, padding = 2), # -> N, 32, 7, 7\n",
+        "            nn.ReLU(),\n",
+        "            nn.ConvTranspose2d(12, 24, 9, stride=2, padding= 4, output_padding=1), # N, 16, 14, 14 (N,16,13,13 without output_padding)\n",
+        "            nn.ReLU(),\n",
+        "            nn.ConvTranspose2d(24, 3, 12, stride=2, padding= 5, output_padding=0), # N, 1, 28, 28  (N,1,27,27)\n",
+        "            nn.Sigmoid()\n",
+        "        )\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        encoded = self.encoder(x)\n",
+        "        decoded = self.decoder(encoded)\n",
+        "        return decoded\n",
+        "    "
+      ],
+      "metadata": {
+        "id": "Ru6wAGH0xOzC"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "model = Autoencoder()\n",
+        "model.to(device)\n",
+        "criterion = nn.MSELoss()\n",
+        "optimizer = torch.optim.Adam(model.parameters(),\n",
+        "                             lr=1e-3, \n",
+        "                             weight_decay=1e-5)"
+      ],
+      "metadata": {
+        "id": "WAcYEsCp7YZe"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "img, _ = next(dataiter)\n",
+        "noisy = add_noise(img)\n",
+        "noisy = noisy.numpy()\n",
+        "img = img.numpy()\n",
+        "plt.figure(figsize=(10, 4))\n",
+        "for i in range(6):\n",
+        "    plt.subplot(2, 6, i+1)\n",
+        "    plt.imshow(noisy[i].transpose(1, 2, 0))\n",
+        "    plt.title(\"Noisy\")\n",
+        "    plt.subplot(2, 6, i+7)\n",
+        "    plt.imshow(img[i].transpose(1, 2, 0))\n",
+        "    plt.title(\"Original\")\n",
+        " "
+      ],
+      "metadata": {
+        "id": "UeGSFREX7dpC"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from numpy.lib.function_base import add_docstring\n",
+        "# Point to training loop video\n",
+        "num_epochs = 30\n",
+        "outputs = []\n",
+        "for epoch in range(num_epochs):\n",
+        "    tl = 0\n",
+        "    vl = 0\n",
+        "    for (img, _) in train_data_loader:\n",
+        "        noisy = add_noise(img)\n",
+        "        img = img.to(device)\n",
+        "        noisy = noisy.to(device)\n",
+        "        # img = img.reshape(-1, 28*28) # -> use for Autoencoder_Linear\n",
+        "        recon = model(noisy)\n",
+        "        train_loss = criterion(recon, img)\n",
+        "        \n",
+        "        optimizer.zero_grad()\n",
+        "        train_loss.backward()\n",
+        "        optimizer.step()\n",
+        "        tl = tl+train_loss.item()\n",
+        "    \n",
+        "    for (img, _) in test_loader:\n",
+        "        noisy = add_noise(img)\n",
+        "        img = img.to(device)\n",
+        "        noisy = noisy.to(device)\n",
+        "        recon = model(noisy)\n",
+        "        loss = criterion(recon, img)\n",
+        "        vl = vl+loss.item()\n",
+        "\n",
+        "    print(f'Epoch:{epoch+1}, Train_Loss:{tl/391}, Val_Loss: {vl/2000}')\n",
+        "    outputs.append((epoch, img, recon))"
+      ],
+      "metadata": {
+        "id": "-KQc23C17fWL"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "plt.figure(figsize=(10, 6))\n",
+        "for i in range(6):\n",
+        "    \n",
+        "    images = torch.tensor(val_set[i][0])\n",
+        "    noisy = add_noise(images)\n",
+        "    n = noisy.to(device)\n",
+        "    recon = model(n)\n",
+        "    reconstruction = recon.cpu().detach().numpy()\n",
+        "    noisy = noisy.detach().numpy()\n",
+        "    image = images.detach().numpy()\n",
+        "    plt.subplot(3, 6, i+1)\n",
+        "    plt.imshow(image.transpose(1, 2, 0))\n",
+        "    plt.axis(\"off\")\n",
+        "    plt.title(\"Original\")\n",
+        "    plt.subplot(3, 6, i+7)\n",
+        "    plt.imshow(noisy.transpose(1, 2, 0))\n",
+        "    plt.axis(\"off\")\n",
+        "    plt.title(\"Noisy\")\n",
+        "    plt.subplot(3, 6, i+13)\n",
+        "    plt.imshow(reconstruction.transpose(1, 2, 0))\n",
+        "    plt.axis(\"off\")\n",
+        "    plt.title(\"Denoised\")"
+      ],
+      "metadata": {
+        "id": "mWgAzJtv7hl3"
+      },
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}
