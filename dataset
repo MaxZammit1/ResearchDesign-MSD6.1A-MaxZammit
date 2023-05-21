@@ -1,0 +1,21 @@
+Link to dataset
+https://github.com/phelber/EuroSAT
+
+Importing dataset in tensorflow:
+import tensorflow_datasets as tfds
+
+data, info = tfds.load(
+      'eurosat', 
+      with_info=True
+    )
+   
+   
+Importing dataset in PyTorch:
+
+root = '2750/'
+download_ON = os.path.exists(root)
+
+if not download_ON:
+    os.system('wget http://madm.dfki.de/files/sentinel/EuroSAT.zip')
+    !unzip EuroSAT.zip
+    download_ON = True
